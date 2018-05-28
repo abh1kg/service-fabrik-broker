@@ -179,6 +179,17 @@ class BoshDirectorClient extends HttpClient {
     });
   }
 
+  getCurrentTaskState(deploymentName, operation) {
+    const currentState = BoshTaskPolicies.currentState;
+    // check if its a create operation, if it's a create deployment request
+    // check if the task was previously staggered
+    // if it was previously staggered, it should be present in the currentState cache
+    if (currentState.contains(deploymentName)) {
+
+    }
+    return this.getDirectorConfig(deploymentName)
+  }
+
   makeRequest(requestDetails, expectedStatusCode, deploymentName, attempt) {
     return this.getDirectorConfig(deploymentName)
       .then(directorConfig => this.makeRequestWithConfig(requestDetails, expectedStatusCode, directorConfig))
@@ -342,6 +353,53 @@ class BoshDirectorClient extends HttpClient {
       .then(deployment => deployment.manifest ?
         yaml.safeLoad(deployment.manifest) : null
       );
+  }
+
+  /**
+   * Fetch the director config for the operation and deployment
+   * 
+   * @param {type of action [create, update, delete]} action 
+   * @param {name of BOSH deployment} deploymentName 
+   */
+  getDirectorForOperation(action, deploymentName) {
+    logger.debug(`Fetching director for operation ${action} and deployment ${deploymentName}`);
+    if (action === CONST.OPERATION_TYPE.CREATE) {
+      return _.sample(this.activePrimary);
+    } else {
+      return this.getDirectorConfig(deploymentName);
+    }
+  }
+
+  /** 
+   * get the current tasks in the director (in processing, cancelling state)
+   * task count should be retrieved for ALL types of operations
+   * 
+   */
+  getCurrentTasks(action, directorConfig) {
+    let query = {
+      state: 'processing,cancelling',
+      verbose: 2
+    };
+    return this.makeRequestWithConfig({
+      method: 'GET',
+      url: '/tasks',
+      qs: query
+    }, 200, directorConfig).then(out => {
+      // out is the array of currently running tasks
+      let currentTotal = out.length;
+      let taskGroup = _.groupBy(out, (entry) => {
+        if (entry.context_id === "scheduled_by_service_fabrik") {
+          return "scheduled";
+        } else {
+          return "user";
+        }
+      });
+      let taskCount = {
+        "user": taskGroup.user.length,
+        "scheduled": taskGroup.scheduled.length
+      };
+      return taskCount;
+    });
   }
 
   createOrUpdateDeployment(action, manifest, opts) {

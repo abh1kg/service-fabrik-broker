@@ -31,6 +31,7 @@ const ServiceBindingAlreadyExists = errors.ServiceBindingAlreadyExists;
 const ServiceBindingNotFound = errors.ServiceBindingNotFound;
 const ServiceInstanceNotFound = errors.ServiceInstanceNotFound;
 const Forbidden = errors.Forbidden;
+const DeploymentDelayed = errors.DeploymentDelayed;
 const catalog = require('../models/catalog');
 
 class DirectorManager extends BaseManager {
@@ -177,6 +178,25 @@ class DirectorManager extends BaseManager {
     return this.director.getDeploymentIps(deploymentName);
   }
 
+  executePolicy(scheduled, action, deploymentName) {
+    const targetDirectorConfig = this.director.getDirectorForOperation(action, deploymentName);
+    this.director.getCurrentTasks(action, targetDirectorConfig).then(out => {
+      let currentTasks, policy, maxWorkers;
+      if (scheduled) {
+        currentTasks = out.scheduled;
+        policy = targetDirectorConfig.policies.scheduled;
+      } else {
+        currentTasks = out.user;
+        policy = targetDirectorConfig.policies.user;
+      }
+      maxWorkers = policy.max_workers;
+      if (currentTasks < maxWorkers) {
+        return true;
+      }
+      return false;
+    });
+  }
+
   createOrUpdateDeployment(deploymentName, params, args) {
     const previousValues = _.get(params, 'previous_values');
     const action = _.isPlainObject(previousValues) ? CONST.OPERATION_TYPE.UPDATE : CONST.OPERATION_TYPE.CREATE;
@@ -185,6 +205,9 @@ class DirectorManager extends BaseManager {
     args = _.set(args, 'bosh_director_name', _.get(params, 'parameters.bosh_director_name'));
     const username = _.get(params, 'parameters.username');
     const password = _.get(params, 'parameters.password');
+    const scheduled = _.get(params, 'scheduled') || false;
+    const directorConfig = this.director.getDirectorForOperation(action, deploymentName);
+
     logger.info(`Starting to ${action} deployment '${deploymentName}'...`);
     let serviceLifeCycle;
     let actionContext = {};
@@ -194,8 +217,14 @@ class DirectorManager extends BaseManager {
       .set('sf_operations_args', args)
       .value();
     let preUpdateAgentResponse = {};
-    return Promise
-      .try(() => {
+    return Promise.try(() => {
+        const shouldRunNow = this.executePolicy(scheduled, action, deploymentName);
+        if (shouldRunNow) {
+          return;
+        }
+        throw new DeploymentDelayed(deploymentName);
+      })
+      .then(() => {
         switch (action) {
         case CONST.OPERATION_TYPE.UPDATE:
           serviceLifeCycle = CONST.SERVICE_LIFE_CYCLE.PRE_UPDATE;
