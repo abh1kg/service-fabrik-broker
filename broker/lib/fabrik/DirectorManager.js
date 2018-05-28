@@ -222,6 +222,9 @@ class DirectorManager extends BaseManager {
         if (shouldRunNow) {
           return;
         }
+        if (!scheduled){
+          //stagger here
+        }
         throw new DeploymentDelayed(deploymentName);
       })
       .then(() => {
